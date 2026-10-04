@@ -1,0 +1,181 @@
+openapi: 3.0.3
+info:
+  title: Whitelists Traffic Service API
+  version: 1.4.0
+  description: |
+    Per-user WHITELISTS traffic accounting and quota enforcement service.
+    All HTTP endpoints require X-API-Key. Quota values are bytes in responses and GB in total fields of write requests.
+servers:
+  - url: http://localhost:8080
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    TrafficResponse:
+      type: object
+      required: [total, used]
+      properties:
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Whitelists quota in bytes. 0 means unlimited.
+        used:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Whitelists traffic used in the current local/panel period.
+    RegisterUser:
+      type: object
+      required: [total, remnawave_id]
+      additionalProperties: false
+      properties:
+        total:
+          type: number
+          format: double
+          minimum: 0
+          description: Whitelists traffic quota in GB, converted using 1024^3 bytes per GB.
+        limit_reset:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: Optional custom reset period in days. Omit or null to synchronize with Remnawave.
+        remnawave_id:
+          type: integer
+          format: int64
+          minimum: 1
+    UpdateUser:
+      type: object
+      additionalProperties: false
+      properties:
+        total:
+          type: number
+          format: double
+          minimum: 0
+        limit_reset:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: Omit to keep the current mode; null switches back to Remnawave synchronization.
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+  parameters:
+    UserID:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+paths:
+  /healthz:
+    get:
+      security:
+        - ApiKeyAuth: []
+      summary: Health/readiness check
+      responses:
+        '200':
+          description: Dependencies are reachable.
+        '401':
+          description: Invalid API key.
+        '503':
+          description: PostgreSQL or Redis unavailable.
+  /v1/users/{id}/trafic:
+    get:
+      security:
+        - ApiKeyAuth: []
+      summary: Get whitelists traffic
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: Traffic data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficResponse'
+        '401':
+          description: Unauthorized.
+        '404':
+          description: User not found.
+        '500':
+          description: Internal server error.
+  /v1/users/{id}/trafic/reset:
+    post:
+      security:
+        - ApiKeyAuth: []
+      summary: Reset whitelists usage
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: Usage reset successfully.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: User not found.
+  /v1/users/{id}:
+    post:
+      security:
+        - ApiKeyAuth: []
+      summary: Register a user for whitelists accounting
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterUser'
+      responses:
+        '201':
+          description: Created.
+        '400':
+          description: Bad request.
+        '401':
+          description: Unauthorized.
+        '409':
+          description: User already exists.
+    put:
+      security:
+        - ApiKeyAuth: []
+      summary: Change quota and/or reset mode
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUser'
+      responses:
+        '200':
+          description: Updated. If the new quota is above current usage after an exhaustion state, whitelist squad restoration is queued automatically when enforcement is enabled.
+        '400':
+          description: Bad request.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: User not found.
+    delete:
+      security:
+        - ApiKeyAuth: []
+      summary: Delete user completely from the service database
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: User not found.
+
