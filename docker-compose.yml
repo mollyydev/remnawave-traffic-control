@@ -7,9 +7,7 @@ services:
     env_file:
       - .env
     ports:
-      - "127.0.0.1:8080:8080"
-    expose:
-      - "8080"
+      - "127.0.0.1:${HTTP_PORT:-8080}:${HTTP_PORT:-8080}"
     networks:
       - remnawave-network
     read_only: true

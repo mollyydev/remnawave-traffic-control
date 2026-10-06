@@ -16,6 +16,6 @@ COPY --from=build /out/whitelists /usr/local/bin/whitelists
 USER whitelists:whitelists
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- --header="X-API-Key: $$API_KEY" http://127.0.0.1:8080/healthz >/dev/null || exit 1
+  CMD sh -c 'P="$${HTTP_PORT:-$${HTTP_ADDR##*:}}"; P="$${P:-$${http_adr##*:}}"; P="$${P:-$${HTTP_ADR##*:}}"; P="$${P:-$${http_addr##*:}}"; P="$${P:-8080}"; wget -qO- --header="X-API-Key: $$API_KEY" "http://127.0.0.1:$$P/healthz"' >/dev/null || exit 1
 
 ENTRYPOINT ["/usr/local/bin/whitelists"]

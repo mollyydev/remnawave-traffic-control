@@ -25,7 +25,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8080:8080"
+      - "${HTTP_PORT:-8080}:${HTTP_PORT:-8080}"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m

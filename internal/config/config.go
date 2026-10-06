@@ -46,6 +46,8 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	loadDotEnv()
+
 	legacyEnforce, err := getBool("ENFORCE_WHITELIST_LIMIT", false)
 	if err != nil {
 		return Config{}, err
@@ -56,7 +58,7 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:               getString("HTTP_ADDR", ":8080"),
+		HTTPAddr:               getHTTPAddr(),
 		APIKey:                 getString("API_KEY", ""),
 		DatabaseURL:            getString("DATABASE_URL", ""),
 		RemnawaveDatabaseURL:   getString("REMNAWAVE_DATABASE_URL", ""),
@@ -190,11 +192,66 @@ func validHTTPURL(raw string) bool {
 	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
+func loadDotEnv() {
+	data, err := os.ReadFile(".env")
+	if err != nil {
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		val = strings.Trim(val, `"'`)
+		if _, exists := os.LookupEnv(key); !exists {
+			_ = os.Setenv(key, val)
+		}
+	}
+}
+
+func getHTTPAddr() string {
+	keys := []string{
+		"HTTP_ADDR", "http_addr",
+		"HTTP_ADR", "http_adr",
+		"HTTP_PORT", "http_port",
+		"PORT", "port",
+	}
+	for _, key := range keys {
+		if v, ok := os.LookupEnv(key); ok {
+			v = strings.TrimSpace(v)
+			if v != "" {
+				if !strings.Contains(v, ":") {
+					return ":" + v
+				}
+				return v
+			}
+		}
+	}
+	return ":8080"
+}
+
 func getString(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok {
 		v = strings.TrimSpace(v)
 		if v != "" {
 			return v
+		}
+	}
+	lowerKey := strings.ToLower(key)
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 2 && strings.ToLower(strings.TrimSpace(parts[0])) == lowerKey {
+			v := strings.TrimSpace(parts[1])
+			if v != "" {
+				return v
+			}
 		}
 	}
 	return def
