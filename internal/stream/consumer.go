@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"whitelists-service/internal/store"
+	"github.com/mollyydev/remnawave-traffic-control/internal/store"
 )
 
 var ErrPermanentMessage = errors.New("permanent stream message error")

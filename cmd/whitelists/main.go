@@ -16,12 +16,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
-	"whitelists-service/internal/api"
-	"whitelists-service/internal/config"
-	"whitelists-service/internal/remna"
-	"whitelists-service/internal/store"
-	"whitelists-service/internal/stream"
-	"whitelists-service/internal/webhook"
+	"github.com/mollyydev/remnawave-traffic-control/internal/api"
+	"github.com/mollyydev/remnawave-traffic-control/internal/config"
+	"github.com/mollyydev/remnawave-traffic-control/internal/remna"
+	"github.com/mollyydev/remnawave-traffic-control/internal/store"
+	"github.com/mollyydev/remnawave-traffic-control/internal/stream"
+	"github.com/mollyydev/remnawave-traffic-control/internal/webhook"
 )
 
 func main() {

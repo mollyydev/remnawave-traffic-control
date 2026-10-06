@@ -50,9 +50,10 @@ type User struct {
 	PanelLastResetAt *time.Time
 	PeriodStartedAt  *time.Time
 	UsageBaselineAt  *time.Time
-	LimitReached     bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	LimitReached         bool
+	ExhaustionGeneration int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type PanelState struct {
