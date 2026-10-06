@@ -87,7 +87,7 @@ paths:
         '401':
           description: Invalid API key.
         '503':
-          description: PostgreSQL or Redis unavailable.
+          description: PostgreSQL unavailable.
   /v1/users/{id}/trafic:
     get:
       security:

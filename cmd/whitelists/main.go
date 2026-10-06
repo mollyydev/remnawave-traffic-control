@@ -14,13 +14,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
 	"github.com/mollyydev/remnawave-traffic-control/internal/api"
 	"github.com/mollyydev/remnawave-traffic-control/internal/config"
 	"github.com/mollyydev/remnawave-traffic-control/internal/remna"
 	"github.com/mollyydev/remnawave-traffic-control/internal/store"
-	"github.com/mollyydev/remnawave-traffic-control/internal/stream"
 	"github.com/mollyydev/remnawave-traffic-control/internal/webhook"
 )
 
@@ -67,24 +65,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         cfg.RedisAddr,
-		Password:     cfg.RedisPassword,
-		DB:           cfg.RedisDB,
-		PoolSize:     cfg.RedisPoolSize,
-		MinIdleConns: 0,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		PoolTimeout:  15 * time.Second,
-		MaxRetries:   3,
-	})
-	defer rdb.Close()
-	if err := pingWithTimeout(ctx, func(pctx context.Context) error { return rdb.Ping(pctx).Err() }); err != nil {
-		logger.Error("redis ping failed", "error", err)
-		os.Exit(1)
-	}
-
 	eventOptions := store.EventOptions{
 		Enforcement:     cfg.EnforceWhitelistAccess,
 		Webhook:         cfg.WebhookEnabled,
@@ -95,52 +75,13 @@ func main() {
 	remnaClient := remna.New(cfg.RemnawaveURL, cfg.RemnawaveToken, cfg.RemnawaveHTTPTimeout, cfg.RemnawaveMaxRetries)
 	whClient := webhook.New(cfg.WebhookEnabled, cfg.WebhookURL, cfg.WebhookSecret, cfg.WebhookTimeout)
 
-	// First align all REMNAWAVE-mode users with the panel's current reset
-	// marker, then rebuild current-period usage from the authoritative history.
-	if _, err := st.SyncAllPanelState(ctx, cfg.RemnawaveSyncBatchSize, eventOptions); err != nil {
-		logger.Error("initial panel sync failed", "error", err)
-		os.Exit(1)
-	}
-	if count, err := st.ReconcileAll(ctx, eventOptions, cfg.ReconcilePageSize); err != nil {
-		logger.Error("initial traffic reconciliation failed", "error", err)
-		os.Exit(1)
-	} else {
-		logger.Info("initial traffic reconciliation complete", "users", count)
-	}
-
-	if cfg.EnforceWhitelistAccess {
-		count, err := st.EnqueueAccessSyncAll(ctx, cfg.ReconcilePageSize)
-		if err != nil {
-			logger.Error("initial whitelist access sync enqueue failed", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("initial whitelist access sync queued", "users", count)
-		if cfg.AccessReconcileInterval > 0 {
-			go runAccessReconcileWorker(ctx, st, cfg.AccessReconcileInterval, cfg.ReconcilePageSize, logger)
-		}
-	}
-
-	consumer := stream.New(
-		rdb,
-		st,
-		cfg.RedisStream,
-		cfg.RedisGroup,
-		cfg.RedisConsumerName,
-		cfg.RedisStartID,
-		logger,
-		eventOptions,
-	)
-
-	go runTrafficConsumer(ctx, consumer, logger)
 	go runCustomResetWorker(ctx, st, cfg.WorkerPollInterval, eventOptions, logger)
-	go runPanelSyncWorker(ctx, st, cfg.RemnawaveSyncInterval, cfg.RemnawaveSyncBatchSize, eventOptions, logger)
-	go runReconcileWorker(ctx, st, cfg.ReconcileInterval, cfg.ReconcilePageSize, eventOptions, logger)
 	go runOutboxWorker(ctx, st, remnaClient, whClient, cfg.WhitelistSquadID, cfg.EnforceWhitelistAccess, cfg.DropConnectionsOnLimit, cfg.WebhookEnabled, cfg.OutboxMaxRetries, cfg.OutboxClaimLease, cfg.WorkerPollInterval, logger)
-	go runCleanupWorker(ctx, st, 24*time.Hour, cfg.ProcessedMessageRetention, cfg.OutboxRetention, logger)
+	go runCleanupWorker(ctx, st, 24*time.Hour, cfg.OutboxRetention, logger)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.New(st, db, remnaDB, rdb, cfg.APIKey, eventOptions, cfg.EnforceWhitelistAccess, logger).Handler(),
+		Handler:           api.New(st, db, remnaDB, cfg.APIKey, eventOptions, cfg.EnforceWhitelistAccess, logger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -159,7 +100,6 @@ func main() {
 
 	logger.Info("whitelists service started",
 		"addr", cfg.HTTPAddr,
-		"stream", cfg.RedisStream,
 		"nodes", cfg.WhitelistsNodeIDs,
 		"enforce_whitelist_access", cfg.EnforceWhitelistAccess,
 		"drop_connections_on_limit", cfg.DropConnectionsOnLimit,
@@ -191,39 +131,6 @@ func pingWithTimeout(parent context.Context, fn func(context.Context) error) err
 	return fn(ctx)
 }
 
-func runTrafficConsumer(ctx context.Context, consumer *stream.Consumer, logger *slog.Logger) {
-	for {
-		err := consumer.Run(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		logger.Error("traffic consumer stopped; restarting", "error", err)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(time.Second):
-		}
-	}
-}
-
-func runAccessReconcileWorker(ctx context.Context, st *store.Store, interval time.Duration, pageSize int, logger *slog.Logger) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			count, err := st.EnqueueAccessSyncAll(ctx, pageSize)
-			if err != nil {
-				logger.Error("access reconcile enqueue failed", "error", err)
-			} else if count > 0 {
-				logger.Info("access reconcile queued", "users", count)
-			}
-		}
-	}
-}
-
 func runCustomResetWorker(ctx context.Context, st *store.Store, interval time.Duration, opts store.EventOptions, logger *slog.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -237,42 +144,6 @@ func runCustomResetWorker(ctx context.Context, st *store.Store, interval time.Du
 				logger.Error("custom reset worker failed", "error", err)
 			} else if count > 0 {
 				logger.Info("custom resets applied", "count", count)
-			}
-		}
-	}
-}
-
-func runPanelSyncWorker(ctx context.Context, st *store.Store, interval time.Duration, batchSize int, opts store.EventOptions, logger *slog.Logger) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			count, err := st.SyncAllPanelState(ctx, batchSize, opts)
-			if err != nil {
-				logger.Error("panel sync worker failed", "error", err)
-			} else if count > 0 {
-				logger.Info("panel sync complete", "users", count)
-			}
-		}
-	}
-}
-
-func runReconcileWorker(ctx context.Context, st *store.Store, interval time.Duration, pageSize int, opts store.EventOptions, logger *slog.Logger) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			count, err := st.ReconcileAll(ctx, opts, pageSize)
-			if err != nil {
-				logger.Error("traffic reconciliation failed", "error", err)
-			} else {
-				logger.Info("traffic reconciliation complete", "users", count)
 			}
 		}
 	}
@@ -567,7 +438,7 @@ func min(a, b int) int {
 	return b
 }
 
-func runCleanupWorker(ctx context.Context, st *store.Store, interval, processedRetention, outboxRetention time.Duration, logger *slog.Logger) {
+func runCleanupWorker(ctx context.Context, st *store.Store, interval, outboxRetention time.Duration, logger *slog.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -575,7 +446,7 @@ func runCleanupWorker(ctx context.Context, st *store.Store, interval, processedR
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := st.Cleanup(ctx, processedRetention, outboxRetention); err != nil {
+			if err := st.Cleanup(ctx, 0, outboxRetention); err != nil {
 				logger.Error("cleanup failed", "error", err)
 			}
 		}

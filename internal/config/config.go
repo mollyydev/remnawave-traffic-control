@@ -20,15 +20,6 @@ type Config struct {
 	DBMaxConns           int32
 	RemnawaveDBMaxConns  int32
 
-	RedisAddr         string
-	RedisPassword     string
-	RedisDB           int
-	RedisPoolSize     int
-	RedisStream       string
-	RedisGroup        string
-	RedisConsumerName string
-	RedisStartID      string
-
 	WhitelistsNodeIDs []int64
 
 	RemnawaveURL         string
@@ -36,22 +27,16 @@ type Config struct {
 	RemnawaveHTTPTimeout time.Duration
 	RemnawaveMaxRetries  int
 
-	RemnawaveSyncInterval     time.Duration
-	ReconcileInterval         time.Duration
-	ReconcileSafetyMargin     time.Duration
-	AccessReconcileInterval   time.Duration
-	WorkerPollInterval        time.Duration
-	OutboxClaimLease          time.Duration
-	ProcessedMessageRetention time.Duration
-	OutboxRetention           time.Duration
-	OutboxMaxRetries          int
-	ReconcilePageSize         int
-	RemnawaveSyncBatchSize    int
-	ShutdownTimeout           time.Duration
-	MigrationTimeout          time.Duration
-	EnforceWhitelistAccess    bool
-	DropConnectionsOnLimit    bool
-	WhitelistSquadID          string
+	ReconcileSafetyMargin  time.Duration
+	WorkerPollInterval     time.Duration
+	OutboxClaimLease       time.Duration
+	OutboxRetention        time.Duration
+	OutboxMaxRetries       int
+	ShutdownTimeout        time.Duration
+	MigrationTimeout       time.Duration
+	EnforceWhitelistAccess bool
+	DropConnectionsOnLimit bool
+	WhitelistSquadID       string
 
 	WebhookEnabled    bool
 	WebhookURL        string
@@ -75,12 +60,6 @@ func Load() (Config, error) {
 		APIKey:                 getString("API_KEY", ""),
 		DatabaseURL:            getString("DATABASE_URL", ""),
 		RemnawaveDatabaseURL:   getString("REMNAWAVE_DATABASE_URL", ""),
-		RedisAddr:              getString("REDIS_ADDR", "remnawave-redis:6379"),
-		RedisPassword:          getString("REDIS_PASSWORD", ""),
-		RedisStream:            getString("REDIS_STREAM", "ioraw:export:user_usage"),
-		RedisGroup:             getString("REDIS_CONSUMER_GROUP", "whitelists-v1"),
-		RedisConsumerName:      getString("REDIS_CONSUMER_NAME", hostname()),
-		RedisStartID:           getString("REDIS_START_ID", "$"),
 		RemnawaveURL:           strings.TrimRight(getString("REMNAWAVE_URL", ""), "/"),
 		RemnawaveToken:         getString("REMNAWAVE_TOKEN", ""),
 		EnforceWhitelistAccess: defaultEnforce,
@@ -103,12 +82,6 @@ func Load() (Config, error) {
 	if cfg.RemnawaveURL == "" || cfg.RemnawaveToken == "" {
 		return Config{}, fmt.Errorf("REMNAWAVE_URL and REMNAWAVE_TOKEN are required")
 	}
-	if getString("REDIS_ADDR", "") == "" && cfg.RedisAddr == "" {
-		return Config{}, fmt.Errorf("REDIS_ADDR is required")
-	}
-	if cfg.RedisStream == "" || cfg.RedisGroup == "" || cfg.RedisConsumerName == "" {
-		return Config{}, fmt.Errorf("REDIS_STREAM, REDIS_CONSUMER_GROUP and REDIS_CONSUMER_NAME are required")
-	}
 
 	cfg.DBMaxConns, err = getPositiveInt32("DB_MAX_CONNS", 4)
 	if err != nil {
@@ -118,23 +91,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.RedisDB, err = getRangeInt("REDIS_DB", 0, 0, 15)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.RedisPoolSize, err = getPositiveInt("REDIS_POOL_SIZE", 8)
-	if err != nil {
-		return Config{}, err
-	}
 	cfg.RemnawaveMaxRetries, err = getNonNegativeInt("REMNAWAVE_MAX_RETRIES", 3)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.ReconcilePageSize, err = getPositiveInt("RECONCILE_PAGE_SIZE", 250)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.RemnawaveSyncBatchSize, err = getPositiveInt("REMNAWAVE_SYNC_BATCH_SIZE", 500)
 	if err != nil {
 		return Config{}, err
 	}
@@ -152,19 +109,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.RemnawaveSyncInterval, err = getPositiveDuration("REMNAWAVE_SYNC_INTERVAL", 2*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.ReconcileInterval, err = getPositiveDuration("RECONCILE_INTERVAL", 15*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.ReconcileSafetyMargin, err = getPositiveDuration("RECONCILE_SAFETY_MARGIN", 2*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.AccessReconcileInterval, err = getNonNegativeDuration("ACCESS_RECONCILE_INTERVAL", 0)
+	cfg.ReconcileSafetyMargin, err = getNonNegativeDuration("RECONCILE_SAFETY_MARGIN", 0)
 	if err != nil {
 		return Config{}, err
 	}
@@ -173,10 +118,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.OutboxClaimLease, err = getPositiveDuration("OUTBOX_CLAIM_LEASE", 2*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.ProcessedMessageRetention, err = getPositiveDuration("PROCESSED_MESSAGE_RETENTION", 35*24*time.Hour)
 	if err != nil {
 		return Config{}, err
 	}
@@ -236,9 +177,6 @@ func Load() (Config, error) {
 		if len(cfg.WebhookSecret) < 32 {
 			return Config{}, fmt.Errorf("WEBHOOK_SECRET must be at least 32 characters when WEBHOOK_ENABLED=true")
 		}
-	}
-	if cfg.RedisStartID == "" {
-		return Config{}, fmt.Errorf("REDIS_START_ID cannot be empty")
 	}
 
 	return cfg, nil
@@ -373,11 +311,4 @@ func getPositiveInt64List(key string) ([]int64, error) {
 		result = append(result, n)
 	}
 	return result, nil
-}
-
-func hostname() string {
-	if h, err := os.Hostname(); err == nil && h != "" {
-		return h
-	}
-	return "whitelists-worker"
 }

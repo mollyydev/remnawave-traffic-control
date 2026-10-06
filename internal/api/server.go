@@ -18,7 +18,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
 	"github.com/mollyydev/remnawave-traffic-control/internal/store"
 )
@@ -26,7 +25,6 @@ import (
 type Server struct {
 	store            *store.Store
 	db               *pgxpool.Pool
-	redis            *redis.Client
 	remnaDB          *pgxpool.Pool
 	apiKey           string
 	events           store.EventOptions
@@ -72,12 +70,11 @@ type trafficResponse struct {
 	Used  int64 `json:"used"`
 }
 
-func New(st *store.Store, db, remnaDB *pgxpool.Pool, rdb *redis.Client, apiKey string, events store.EventOptions, enforceWhitelist bool, logger *slog.Logger) *Server {
+func New(st *store.Store, db, remnaDB *pgxpool.Pool, apiKey string, events store.EventOptions, enforceWhitelist bool, logger *slog.Logger) *Server {
 	return &Server{
 		store:            st,
 		db:               db,
 		remnaDB:          remnaDB,
-		redis:            rdb,
 		apiKey:           apiKey,
 		events:           events,
 		enforceWhitelist: enforceWhitelist,
@@ -143,10 +140,6 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	if err := s.redis.Ping(ctx).Err(); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "redis unavailable")
-		return
-	}
 	if s.remnaDB != nil {
 		if err := s.remnaDB.Ping(ctx); err != nil {
 			writeError(w, http.StatusServiceUnavailable, "Remnawave database unavailable")
@@ -174,7 +167,7 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w, http.MethodGet)
 			return
 		}
-		u, err := s.store.GetUser(r.Context(), id)
+		u, err := s.store.SyncAndReconcileUser(r.Context(), id, s.events)
 		if err != nil {
 			s.writeStoreError(w, err)
 			return

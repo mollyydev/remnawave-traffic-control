@@ -462,92 +462,6 @@ func (s *Store) ResetUsage(ctx context.Context, id int64, opts EventOptions) (Us
 	return u, nil
 }
 
-// ApplyUsage consumes a Remnawave Redis Stream message. Remnawave exports
-// per-node user traffic deltas, so the value in records is added once per
-// stream message. eventAt prevents delayed messages from an earlier local
-// period from leaking into a freshly reset counter.
-func (s *Store) ApplyUsage(ctx context.Context, streamID string, eventAt time.Time, nodeID int64, records map[int64]int64, opts EventOptions) error {
-	if !s.isWhitelistNode(nodeID) || len(records) == 0 {
-		return nil
-	}
-
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	var inserted bool
-	err = tx.QueryRow(ctx, `
-		INSERT INTO processed_stream_messages(stream_id) VALUES($1)
-		ON CONFLICT DO NOTHING RETURNING TRUE`, streamID).Scan(&inserted)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return tx.Commit(ctx)
-	}
-	if err != nil {
-		return err
-	}
-
-	for remnaID, delta := range records {
-		if delta <= 0 {
-			continue
-		}
-
-		var u User
-		err = scanUser(tx.QueryRow(ctx, `
-			SELECT id, remnawave_id, total_bytes, used_bytes, reset_mode, reset_days,
-			       reset_strategy, next_reset_at, panel_last_reset_at, period_started_at,
-			       usage_baseline_at, limit_reached, exhaustion_generation, created_at, updated_at
-			FROM whitelist_users WHERE remnawave_id=$1 FOR UPDATE`, remnaID), &u)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-
-		if u.ResetMode == ResetModeRemnawave && u.ResetStrategy == ResetStrategyRolling {
-			// A rolling 30-day window cannot be represented by monotonically
-			// adding stream deltas. Reconciliation computes the trailing window.
-			continue
-		}
-		if u.PeriodStartedAt != nil && !eventAt.After(*u.PeriodStartedAt) {
-			continue
-		}
-		if u.UsageBaselineAt != nil && !eventAt.After(*u.UsageBaselineAt) {
-			continue
-		}
-		if delta > maxInt64-u.UsedBytes {
-			return fmt.Errorf("usage overflow for user %d", u.ID)
-		}
-
-		newUsed := u.UsedBytes + delta
-		wasReached := u.LimitReached
-		newReached := u.TotalBytes > 0 && newUsed >= u.TotalBytes
-		newGeneration := u.ExhaustionGeneration
-		if !wasReached && newReached {
-			if newGeneration == maxInt64 {
-				return fmt.Errorf("exhaustion generation overflow for user %d", u.ID)
-			}
-			newGeneration++
-		}
-
-		if _, err := tx.Exec(ctx, `
-			UPDATE whitelist_users SET used_bytes=$2, limit_reached=$3, exhaustion_generation=$4, updated_at=NOW() WHERE id=$1`,
-			u.ID, newUsed, newReached, newGeneration); err != nil {
-			return err
-		}
-
-		if opts.Enabled() && !wasReached && newReached {
-			if err := insertExhaustedOutboxTx(ctx, tx, u.ID, u.RemnawaveID, u.TotalBytes, newUsed, newGeneration); err != nil {
-				return err
-			}
-		}
-	}
-
-	return tx.Commit(ctx)
-}
-
 func (s *Store) ApplyPanelSync(ctx context.Context, id int64, state PanelState, opts EventOptions) (bool, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -635,13 +549,37 @@ func (s *Store) RefreshPanelStateAndUsage(ctx context.Context, id int64, opts Ev
 	return resetOccurred || strategyChanged, nil
 }
 
+// SyncAndReconcileUser synchronizes the user's reset period and recalculates
+// authoritative usage from Remnawave's nodes_user_usage_history.
+// It is called on-demand whenever a user's traffic is requested.
+func (s *Store) SyncAndReconcileUser(ctx context.Context, id int64, opts EventOptions) (User, error) {
+	u, err := s.GetUser(ctx, id)
+	if err != nil {
+		return User{}, err
+	}
+
+	if u.ResetMode == ResetModeRemnawave {
+		state, err := s.GetPanelState(ctx, u.RemnawaveID)
+		if err == nil {
+			_, _ = s.ApplyPanelSync(ctx, id, state, opts)
+		}
+	} else if u.ResetMode == ResetModeDays && u.NextResetAt != nil && !time.Now().UTC().Before(*u.NextResetAt) {
+		_, _ = s.RunDueResets(ctx, opts)
+	}
+
+	if _, err := s.ReconcileUserUsage(ctx, id, opts); err != nil {
+		return User{}, err
+	}
+
+	return s.GetUser(ctx, id)
+}
+
 // ReconcileUserUsage rebuilds current local usage from the authoritative
 // Remnawave history. It uses optimistic concurrency so a reset/top-up cannot
 // be overwritten by a reconciliation query that started before that change.
 //
 // MONTH_ROLLING is special: the usage window is the trailing 30 days rather
-// than the time since period_started_at. Stream deltas are intentionally not
-// applied directly for rolling users; reconciliation is the source of truth.
+// than the time since period_started_at.
 func (s *Store) ReconcileUserUsage(ctx context.Context, id int64, opts EventOptions) (int64, error) {
 	const maxAttempts = 5
 
@@ -732,12 +670,9 @@ func (s *Store) ReconcileUserUsage(ctx context.Context, id int64, opts EventOpti
 		wasReached := current.LimitReached
 		authoritativeUsed := total
 		if !isRolling && authoritativeUsed < current.UsedBytes {
-			// Remnawave history can lag behind the Redis stream. Within an already
-			// established period, never move usage backwards during reconciliation;
-			// the stream path will continue accounting and the next reconciliation can
-			// catch up. A real reset changes period_started_at and therefore permits a
-			// fresh counter. This favors a conservative (slightly overcounted) quota
-			// over accidentally restoring access after a history lag.
+			// Within an already established period, never move usage backwards;
+			// a real reset changes period_started_at and therefore permits a
+			// fresh counter. This guarantees monotonic usage during a period.
 			authoritativeUsed = current.UsedBytes
 		}
 		reached := current.TotalBytes > 0 && authoritativeUsed >= current.TotalBytes

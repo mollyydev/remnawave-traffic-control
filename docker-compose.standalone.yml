@@ -1,0 +1,47 @@
+services:
+  whitelists-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-whitelists}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme_db_password}
+      POSTGRES_DB: ${DB_NAME:-whitelists}
+    volumes:
+      - whitelists_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-whitelists} -d ${DB_NAME:-whitelists}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  whitelists-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      whitelists-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 0.50
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  whitelists_data:
