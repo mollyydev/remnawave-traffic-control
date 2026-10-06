@@ -4,3 +4,8 @@ bin/
 whitelists
 .DS_Store
 itdocumentation.md
+
+# Local AI instructions and project memory
+GEMINI.md
+.agents/project-map.md
+.agents/project-memory.md
