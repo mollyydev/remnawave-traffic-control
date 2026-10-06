@@ -320,14 +320,34 @@ func getPositiveInt32(key string, def int32) (int32, error) {
 	return int32(n), nil
 }
 
+func parseDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+
+	lower := strings.ToLower(s)
+	for _, suffix := range []string{"days", "day", "d"} {
+		if strings.HasSuffix(lower, suffix) {
+			numStr := strings.TrimSpace(lower[:len(lower)-len(suffix)])
+			val, err := strconv.ParseFloat(numStr, 64)
+			if err == nil {
+				return time.Duration(val * float64(24*time.Hour)), nil
+			}
+		}
+	}
+
+	return time.ParseDuration(s)
+}
+
 func getNonNegativeDuration(key string, def time.Duration) (time.Duration, error) {
 	v := getString(key, "")
 	if v == "" {
 		return def, nil
 	}
-	d, err := time.ParseDuration(v)
+	d, err := parseDuration(v)
 	if err != nil || d < 0 {
-		return 0, fmt.Errorf("%s must be a non-negative duration such as 0s or 10m", key)
+		return 0, fmt.Errorf("%s must be a non-negative duration such as 0s, 10m, or 30d", key)
 	}
 	return d, nil
 }
@@ -337,9 +357,9 @@ func getPositiveDuration(key string, def time.Duration) (time.Duration, error) {
 	if v == "" {
 		return def, nil
 	}
-	d, err := time.ParseDuration(v)
+	d, err := parseDuration(v)
 	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("%s must be a positive duration such as 15s or 2m", key)
+		return 0, fmt.Errorf("%s must be a positive duration such as 15s, 2m, or 30d", key)
 	}
 	return d, nil
 }

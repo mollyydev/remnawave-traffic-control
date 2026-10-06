@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestGetHTTPAddr(t *testing.T) {
@@ -79,6 +80,38 @@ func TestGetHTTPAddr(t *testing.T) {
 			got := getHTTPAddr()
 			if got != tt.expected {
 				t.Fatalf("getHTTPAddr() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseDuration(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{in: "30d", want: 30 * 24 * time.Hour},
+		{in: "30D", want: 30 * 24 * time.Hour},
+		{in: "1d", want: 24 * time.Hour},
+		{in: "7days", want: 7 * 24 * time.Hour},
+		{in: "1day", want: 24 * time.Hour},
+		{in: "0.5d", want: 12 * time.Hour},
+		{in: "15s", want: 15 * time.Second},
+		{in: "2m", want: 2 * time.Minute},
+		{in: "24h", want: 24 * time.Hour},
+		{in: "0s", want: 0},
+		{in: "invalid", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := parseDuration(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseDuration(%q) error = %v, wantErr %v", tt.in, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("parseDuration(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
 	}
