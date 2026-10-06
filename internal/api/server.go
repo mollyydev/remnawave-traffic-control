@@ -71,6 +71,7 @@ type trafficResponse struct {
 }
 
 func New(st *store.Store, db, remnaDB *pgxpool.Pool, apiKey string, events store.EventOptions, enforceWhitelist bool, logger *slog.Logger) *Server {
+	apiKey = strings.Trim(strings.TrimSpace(apiKey), `"'`)
 	return &Server{
 		store:            st,
 		db:               db,
@@ -86,7 +87,27 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/v1/users/", s.users)
-	return s.requestID(s.recoverPanic(s.securityHeaders(s.auth(mux))))
+	mux.HandleFunc("/traffic/healthz", s.health)
+	mux.HandleFunc("/traffic/v1/users/", s.users)
+	return s.requestID(s.recoverPanic(s.securityHeaders(s.normalizePath(s.auth(mux)))))
+}
+
+func (s *Server) normalizePath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/traffic/") {
+			r.URL.Path = strings.TrimPrefix(path, "/traffic")
+			if r.URL.RawPath != "" && strings.HasPrefix(r.URL.RawPath, "/traffic/") {
+				r.URL.RawPath = strings.TrimPrefix(r.URL.RawPath, "/traffic")
+			}
+		} else if path == "/traffic" {
+			r.URL.Path = "/"
+			if r.URL.RawPath == "/traffic" {
+				r.URL.RawPath = "/"
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) requestID(next http.Handler) http.Handler {
@@ -125,7 +146,28 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided := r.Header.Get("X-API-Key")
-		if provided == "" || !hmac.Equal([]byte(provided), []byte(s.apiKey)) {
+		if provided == "" {
+			provided = r.Header.Get("X-Api-Key")
+		}
+		if provided == "" {
+			authHeader := r.Header.Get("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				provided = strings.TrimPrefix(authHeader, "Bearer ")
+			} else if strings.HasPrefix(authHeader, "ApiKey ") {
+				provided = strings.TrimPrefix(authHeader, "ApiKey ")
+			} else if strings.HasPrefix(authHeader, "Token ") {
+				provided = strings.TrimPrefix(authHeader, "Token ")
+			} else if authHeader != "" && !strings.Contains(authHeader, " ") {
+				provided = authHeader
+			}
+		}
+		if provided == "" {
+			provided = r.URL.Query().Get("api_key")
+		}
+		provided = strings.Trim(strings.TrimSpace(provided), `"'`)
+		serverKey := strings.Trim(strings.TrimSpace(s.apiKey), `"'`)
+
+		if provided == "" || serverKey == "" || !hmac.Equal([]byte(provided), []byte(serverKey)) {
 			writeError(w, http.StatusUnauthorized, "invalid api key")
 			return
 		}
@@ -150,7 +192,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/v1/users/")
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/traffic") {
+		path = strings.TrimPrefix(path, "/traffic")
+	}
+	path = strings.TrimPrefix(path, "/v1/users/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
 		writeError(w, http.StatusNotFound, "not found")

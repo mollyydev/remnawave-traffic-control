@@ -239,7 +239,7 @@ func getHTTPAddr() string {
 
 func getString(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok {
-		v = strings.TrimSpace(v)
+		v = strings.Trim(strings.TrimSpace(v), `"'`)
 		if v != "" {
 			return v
 		}
@@ -248,7 +248,7 @@ func getString(key, def string) string {
 	for _, env := range os.Environ() {
 		parts := strings.SplitN(env, "=", 2)
 		if len(parts) == 2 && strings.ToLower(strings.TrimSpace(parts[0])) == lowerKey {
-			v := strings.TrimSpace(parts[1])
+			v := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
 			if v != "" {
 				return v
 			}

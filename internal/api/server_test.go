@@ -78,6 +78,115 @@ func TestNullableIntDistinguishesOmittedAndNull(t *testing.T) {
 	}
 }
 
+func TestAuthMiddleware(t *testing.T) {
+	s := &Server{apiKey: `"my-super-secret-key-12345678901234567890"`} // quotes in config
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := s.auth(dummyHandler)
+
+	tests := []struct {
+		name       string
+		headerKey  string
+		headerVal  string
+		authHeader string
+		queryParam string
+		wantStatus int
+	}{
+		{
+			name:       "exact X-API-Key without quotes",
+			headerKey:  "X-API-Key",
+			headerVal:  "my-super-secret-key-12345678901234567890",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "X-API-Key with quotes and spaces",
+			headerKey:  "X-API-Key",
+			headerVal:  `  "my-super-secret-key-12345678901234567890" `,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "Authorization Bearer",
+			authHeader: "Bearer my-super-secret-key-12345678901234567890",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "Authorization ApiKey",
+			authHeader: "ApiKey my-super-secret-key-12345678901234567890",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "query param api_key",
+			queryParam: "api_key=my-super-secret-key-12345678901234567890",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "wrong key",
+			headerKey:  "X-API-Key",
+			headerVal:  "wrong-secret-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "empty key",
+			wantStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := "/v1/users/1"
+			if tt.queryParam != "" {
+				target += "?" + tt.queryParam
+			}
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			if tt.headerKey != "" {
+				req.Header.Set(tt.headerKey, tt.headerVal)
+			}
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("auth returned status %d, want %d", rec.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestNormalizePathMiddleware(t *testing.T) {
+	s := &Server{}
+	var recordedPath string
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recordedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := s.normalizePath(dummyHandler)
+
+	tests := []struct {
+		inputPath string
+		wantPath  string
+	}{
+		{inputPath: "/traffic/v1/users/1", wantPath: "/v1/users/1"},
+		{inputPath: "/traffic/v1/users/1/trafic", wantPath: "/v1/users/1/trafic"},
+		{inputPath: "/traffic/healthz", wantPath: "/healthz"},
+		{inputPath: "/traffic", wantPath: "/"},
+		{inputPath: "/v1/users/1", wantPath: "/v1/users/1"},
+		{inputPath: "/healthz", wantPath: "/healthz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.inputPath, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.inputPath, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if recordedPath != tt.wantPath {
+				t.Fatalf("path = %q, want %q", recordedPath, tt.wantPath)
+			}
+		})
+	}
+}
+
 func requestWithJSON(body string) *http.Request {
 	r := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
 	r.Header.Set("Content-Type", "application/json")
